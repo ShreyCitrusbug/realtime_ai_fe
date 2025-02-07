@@ -1,28 +1,55 @@
 // External imports
 import React, { useState, useRef } from "react";
 
-
-interface ICheckBox {
-    name : string
+interface ICheckBox{
+  name:string
 }
 
+// interface IUserMessage{
+//   identity : {
+//     name : string,
+//     birthDate : string
+//   }
+// }
 
 const RealtimeAiBOTPage : React.FC =()=>{
     const [wenRTCState,setWebRTCState] = useState<boolean>(false)
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
     const [isLoading,setIsLoading] = useState<boolean>(false)
+    // const [userMessage,setUserMessage] = useState<IUserMessage>({identity : {name : "",birthDate : ""}})
 
     // Playing model's audio 
     const audioDivRef = useRef<HTMLDivElement>(null);
 
     // Function calling states
-    const [checkBoxFunction, setCheckBoxFunction] = useState<ICheckBox>({
-        name : ""
-    });
+    const [checkBoxState, setCheckBoxState] = useState<Record<string,boolean>>({});
 
     const date = new Date().toLocaleDateString()
     const BASE_URL = import.meta.env.VITE_API_BASE_URL
+
+    const checkBoxItems = [
+      {
+        "id" : "identityVerification",
+        "name" : "Identity Verification",
+      },
+      {
+        "id" : "patientCheckIn",
+        "name" : "Patient Check In",
+      },
+      {
+        "id" : "initialDiagnostics", 
+        "name" : "Initial Diagnosis",
+      },
+      {
+        "id":"emotionDetection",
+        "name":"Emotion"
+      },
+      {
+        "id" : "diagnosesSuggestion",
+        "name" : "Diagnoses Suggestion"
+      }
+    ]
 
     // function to handle audio Div Element
     function handleDataChannelTrack(event:RTCTrackEvent){
@@ -33,6 +60,19 @@ const RealtimeAiBOTPage : React.FC =()=>{
         audioDivRef.current?.appendChild(audioElement);
     }    
 
+    // Real-time AI function calls
+    const functions = {
+      enableCheckBox :  (parsedArguments:ICheckBox)=>{
+        const {name} = parsedArguments
+        // call the API to enable the checkbox
+        setCheckBoxState((prevState)=>({
+          ...prevState,
+          [name]:true
+        }))
+        return {success:true, checkBoxName : name}
+      },
+    }
+
     // Function to handle data channel
     function createDataChannel(peerConnection:RTCPeerConnection){
         const dataChannel = peerConnection.createDataChannel("response")
@@ -42,27 +82,44 @@ const RealtimeAiBOTPage : React.FC =()=>{
             sessionFunctions()
         })
 
-        dataChannel.addEventListener("message" , async(event)=>{
+        dataChannel.addEventListener("message" , (event)=>{
             const message = JSON.parse(event.data)
-            console.log(message,"message");
-            
-            try {
-                              const functionOutputEvent = {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  output: JSON.stringify({
-                    "name": checkBoxFunction.name
-                  }),
-                },
-              };
-              dataChannel.send(JSON.stringify(functionOutputEvent));
+            // console.log(message,"message");
+            // Catch the conversion and function call
+            if (message.type === "response.done"){
+              const outputItems = message?.response?.output || []
 
-              // Then ask the model to keep responding
-              dataChannel.send(JSON.stringify({ type: "response.create" }));
-            }catch (error) {
-                console.log(error)
+              for (const item of outputItems){
+                if (item.type === "function_call"){
+                  const functionName = item.name;
+                  const args = item.arguments || "{}"
+                  try{
+                    const parsedArgs = JSON.parse(args);  
+                    const fun = functions[functionName as keyof typeof functions]
+                    if (!fun) {
+                      console.warn("Function not found:", functionName)
+                      return
+                    }
+                    const result =  fun(parsedArgs)
+                    const functionOutputEvent = {
+                      type: "conversation.item.create",
+                      item: {
+                        type: "function_call_output",
+                        call_id: item.call_id,
+                        output: JSON.stringify({
+                          result
+                        }),
+                      },
+                    };
+                    dataChannel.send(JSON.stringify(functionOutputEvent));
+                    dataChannel.send(JSON.stringify({ type: "response.create" }));
+                  }catch (error) {
+                    console.log(error)
+                  }
+                }
+              }
             }
+            
         })
     }
 
@@ -119,7 +176,7 @@ const RealtimeAiBOTPage : React.FC =()=>{
                         "Content-Type": "application/sdp",
                     },
                     body:offer.sdp
-                }).then((response)=>response.json()).then((data)=>{
+                }).then((response)=>response.text()).then((data)=>{
                     peerConnection.setRemoteDescription({
                         sdp: data,
                         type: "answer"
@@ -159,7 +216,7 @@ const RealtimeAiBOTPage : React.FC =()=>{
             setTimeout(() => {
                 setIsLoading(false);
                 setWebRTCState(true);
-            }, 4000);
+            }, 2000);
         }else{
             stopWebRTC()
             setWebRTCState(false)
@@ -189,19 +246,23 @@ return (
         <div className="bg-white shadow-md rounded-2xl p-6">
           <h2 className="text-lg font-semibold text-gray-800 mb-4">Call Agenda</h2>
           <ul className="space-y-4">
-            {["Identity Verification", "Patient Check-In", "Medication Review", "Diet Review", "CHF Symptom Self-Assessment", "Physical Activity Review", "Call Summary"].map(
+            {checkBoxItems.map(
               (item, index) => (
                 <li key={index} className="flex items-center space-x-3">
                   <input
                     type="checkbox"
-                    id={item}
-                    className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    id={item.id}
+                    className={`w-5 h-5 border-gray-300 rounded ${
+                      checkBoxState[item.id] ? "text-blue-600 focus:ring-blue-500" : "text-gray-400"
+                    }`}
+                    disabled={true}
+                    checked={checkBoxState[item.id] || false}
                   />
                   <label
-                    htmlFor={item}
+                    htmlFor={item.id}
                     className="text-gray-700 font-medium cursor-pointer"
                   >
-                    {item}
+                    {item.name}
                   </label>
                 </li>
               )
@@ -218,7 +279,7 @@ return (
               className="h-20 w-20 rounded-full object-cover"
             />
             <div>
-              <h3 className="text-xl font-semibold text-gray-800">Rachel</h3>
+              <h3 className="text-xl font-semibold text-gray-800">Verse</h3>
               <p className="text-gray-500 text-sm">AI Assistant</p>
             </div>
           </div>
@@ -274,9 +335,10 @@ return (
           {isLoading
               ? "Starting session..."
               : wenRTCState
-              ? "Session Active. Say 'Hello' to Start!"
+              ? "Session Active"
               : "Begin Interactive Lesson"}
         </button>
+        <div ref={audioDivRef} />
       </footer>
     </div>
   );
