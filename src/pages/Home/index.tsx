@@ -1,31 +1,42 @@
 // External imports
 import React, { useState, useRef } from "react";
 
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
 interface ICheckBox{
   name:string
 }
 
-// interface IUserMessage{
-//   identity : {
-//     name : string,
-//     birthDate : string
-//   }
-// }
+interface ChatMessage {
+  content: string;
+}
+
+interface IUserMessage{
+  identity : string;
+  initialDiagnostics : string;
+  emotion: string;
+  diagnosesSuggestion : string
+}
 
 const RealtimeAiBOTPage : React.FC =()=>{
     const [wenRTCState,setWebRTCState] = useState<boolean>(false)
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
     const [isLoading,setIsLoading] = useState<boolean>(false)
-    // const [userMessage,setUserMessage] = useState<IUserMessage>({identity : {name : "",birthDate : ""}})
+    const [userMessage,setUserMessage] = useState<IUserMessage>({identity : "",initialDiagnostics : "",emotion : "",diagnosesSuggestion : ""})
 
     // Playing model's audio 
     const audioDivRef = useRef<HTMLDivElement>(null);
 
     // Function calling states
     const [checkBoxState, setCheckBoxState] = useState<Record<string,boolean>>({});
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
-    const date = new Date().toLocaleDateString()
+
+    const date = new Date().toLocaleDateString(undefined,{
+      dateStyle : "long",
+    });
     const BASE_URL = import.meta.env.VITE_API_BASE_URL
 
     const checkBoxItems = [
@@ -69,7 +80,29 @@ const RealtimeAiBOTPage : React.FC =()=>{
           ...prevState,
           [name]:true
         }))
-        return {success:true, checkBoxName : name}
+          if (["identityVerification", "initialDiagnostics", "emotionDetection", "diagnosesSuggestion"].includes(name)) {
+            const key = 
+              name === "identityVerification" ? "identity" :
+              name === "initialDiagnostics" ? "initialDiagnostics" :
+              name === "emotionDetection" ? "emotion" :
+              "diagnosesSuggestion";
+
+            const updatedMessage = {
+              identity: "",
+              initialDiagnostics: "",
+              emotion: "",
+              diagnosesSuggestion: "",
+              [key]: chatMessages[chatMessages.length - 1]?.content || ""
+            };
+            setUserMessage(updatedMessage)
+            if (name === "diagnosesSuggestion") {
+              console.log(userMessage,",,,,")
+              saveUserMessages(userMessage);
+            }
+          }
+
+          setChatMessages([]);
+          return {success:true, checkBoxName : name}
       },
     }
 
@@ -84,11 +117,23 @@ const RealtimeAiBOTPage : React.FC =()=>{
 
         dataChannel.addEventListener("message" , (event)=>{
             const message = JSON.parse(event.data)
-            // console.log(message,"message");
+            // Listen Conversion created event and save user message
+            if(message.type === "conversation.item.created"){
+              const item= message.item
+              if(item.type === "message"){
+                if(item.role === "user") {
+                const transcriptPart = item.content.find(
+                  (c: any) => c.type === "input_audio" || c.type === "input_text"
+                );
+                console.log(transcriptPart,'user transcript')
+                if (transcriptPart?.transcript) {
+                  addUserMessage(transcriptPart.transcript);
+                    }
+                  }
+            }}
             // Catch the conversion and function call
             if (message.type === "response.done"){
               const outputItems = message?.response?.output || []
-
               for (const item of outputItems){
                 if (item.type === "function_call"){
                   const functionName = item.name;
@@ -181,14 +226,21 @@ const RealtimeAiBOTPage : React.FC =()=>{
                         sdp: data,
                         type: "answer"
                     }).catch((error)=>{
-                        console.log(error)
-                    })
+                        console.log(error,"Error while calling webRTC")
+                      })
+                    }).catch((error)=>{ 
+                      console.log(error,"Error while calling webRTC.")
+                      toast.error("Error while connecting to AI agent.")
+                    stopWebRTC()
+                    setWebRTCState(false)
                 })
             })
         }).catch((error)=>{
-            console.log(error)
+            console.log(error,"Error while calling webRTC.")
+        }).finally(()=>{
+          toast.success("Connection with AI agent is established.")
+          setWebRTCState(true)
         })
-        setWebRTCState(true)
 
     }
 
@@ -206,6 +258,7 @@ const RealtimeAiBOTPage : React.FC =()=>{
         peerConnectionRef.current = null
         dataChannelRef.current = null
         setWebRTCState(false)
+        setCheckBoxState({})
     }
 
     // function to handle the button click
@@ -218,128 +271,160 @@ const RealtimeAiBOTPage : React.FC =()=>{
                 setWebRTCState(true);
             }, 2000);
         }else{
+            toast.warn("Connection with AI agent is closed.")
             stopWebRTC()
             setWebRTCState(false)
         }
     }
+
+    // Function to manage the user's input messages
+    const addUserMessage = (content:string)=>{
+      setChatMessages((prevMessage)=>{
+        if(prevMessage.length > 0){
+          const lastMessage = prevMessage[prevMessage.length - 1]
+          if (lastMessage.content === content){
+            return prevMessage;
+          }
+        }
+        return [...prevMessage,{content}]
+      })
+    }
+
+    // API call to save all user's messages
+    const saveUserMessages = async (message :IUserMessage)=>{
+      try{
+        const requestData = {
+          "identity" : message.identity,
+          "initial_diagnostics" : message.initialDiagnostics,
+          "emotion" : message.emotion,
+          "diagnoses_suggestion" : message.diagnosesSuggestion
+        }
+        const response = await fetch(`${BASE_URL}/conversation`,{
+          method : "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body:JSON.stringify({
+            requestData
+          })
+        })
+        return response
+      }catch (error){
+        
+      }
+    }
+
 return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center py-6 px-4">
-      {/* Header Section */}
-      <header className="w-full max-w-5xl flex items-center justify-between mb-8">
-        <div className="flex items-center space-x-2">
-          <img
-            src="/logo.png"
-            alt="Realtime AI"
-            className="h-12 w-12"
-          />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800">Realtime AI</h1>
-            <p className="text-sm text-gray-500">Do No Harm</p>
-          </div>
-        </div>
-        <span className="text-gray-600 text-sm">{date}</span>
-      </header>
-
-      {/* Main Section */}
-      <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Call Agenda Section */}
-        <div className="bg-white shadow-md rounded-2xl p-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Call Agenda</h2>
-          <ul className="space-y-4">
-            {checkBoxItems.map(
-              (item, index) => (
-                <li key={index} className="flex items-center space-x-3">
-                  <input
-                    type="checkbox"
-                    id={item.id}
-                    className={`w-5 h-5 border-gray-300 rounded ${
-                      checkBoxState[item.id] ? "text-blue-600 focus:ring-blue-500" : "text-gray-400"
-                    }`}
-                    disabled={true}
-                    checked={checkBoxState[item.id] || false}
-                  />
-                  <label
-                    htmlFor={item.id}
-                    className="text-gray-700 font-medium cursor-pointer"
-                  >
-                    {item.name}
-                  </label>
-                </li>
-              )
-            )}
-          </ul>
-        </div>
-
-        {/* Patient Info Section */}
-        <div className="bg-white shadow-md rounded-2xl p-6">
-          <div className="flex items-center space-x-4 mb-6">
-            <img
-              src="/ai-avatar.png" // Replace with your AI avatar path
-              alt="AI Avatar"
-              className="h-20 w-20 rounded-full object-cover"
-            />
-            <div>
-              <h3 className="text-xl font-semibold text-gray-800">Verse</h3>
-              <p className="text-gray-500 text-sm">AI Assistant</p>
-            </div>
-          </div>
-
+    <div className="min-h-screen flex flex-col items-center justify-center p-6">
+      <ToastContainer />
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6 max-w-5xl w-full">
+        <header className="mb-8">
+          <p className="text-gray-300 text-lg font-bold">{`${date}`}</p>
+        </header>
+        <div className="grid grid-cols-3 gap-6 items-center w-full max-w-5xl">
           <div className="space-y-4">
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600">Fictional Patient Info</h4>
-              <ul className="text-gray-700 text-sm">
-                <li>Patient Name: Jane</li>
-                <li>Gender: Female</li>
-                <li>Age: 74</li>
-              </ul>
+            {checkBoxItems.map((item,index) => (
+              <div key={index} className="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                id={item.id}
+                className="peer hidden"
+                disabled={true}
+                checked={checkBoxState[item.id] || false}
+              />
+            <div
+              className={`w-5 h-5 rounded-sm flex items-center justify-center border-2 ${
+                checkBoxState[item.id]
+                  ? "bg-green-600 border-green-600"
+                  : "bg-gray-600 border-gray-400"
+              }`}
+            >
+              {checkBoxState[item.id] && (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4 text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              )}
             </div>
+            <label
+              htmlFor={item.id}
+              className={`font-medium ${
+                checkBoxState[item.id] ? "text-green-500" : "text-white"
+              }`}
+            >
+            {item.name}
+            </label>
+        </div>
+            ))}
+          </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600">Health History</h4>
-              <p className="text-gray-700 text-sm">
-                Discharged from the hospital 3 days ago following an acute CHF
-                exacerbation.
-              </p>
+          <div className="flex flex-col items-center space-y-6">
+            <div className="w-24 h-24 bg-gray-200 rounded-full">
+                <img
+                    src="src/assets/images/AI_Assistant.png"
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                />
             </div>
-
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600">Medication List</h4>
-              <ul className="text-gray-700 text-sm list-disc list-inside">
-                {[
-                  "Lasix",
-                  "Digoxin",
-                  "Enalapril",
-                  "Metformin",
-                  "Riboflavin",
-                  "Atorvastatin",
-                  "Tramadol",
-                  "Levothyroxine",
-                ].map((medication, index) => (
-                  <li key={index}>{medication}</li>
-                ))}
-              </ul>
+            <p className="text-lg font-semibold text-white">Sage</p>
+            <div className="flex items-center space-x-1">
+              {[...Array(16)].map((_, index) => (
+                <div
+                  key={index}
+                  className={`w-0.5 h-8 bg-gray-400 ${
+                    wenRTCState && !isLoading ? "animate-wave" : ""
+                  }`}
+                  style={{
+                    animationDelay: `${index * 0.1}s`,
+                    transformOrigin: "bottom",
+                  }}
+                ></div>
+              ))}
+              <style>
+                {`
+                  @keyframes wave {
+                    0%, 100% {
+                      transform: scaleY(1);
+                    }
+                    50% {
+                      transform: scaleY(1.8);
+                    }
+                  }
+                  .animate-wave {
+                    animation: wave 1.2s ease-in-out infinite;
+                  }
+                `}
+              </style>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Footer Section */}
-      <footer className="mt-10">
-        <button
-          onClick={handleClick}
-          disabled={isLoading}
-          className={`px-6 py-3 rounded-lg text-white font-medium shadow-md ${
-            wenRTCState ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-black-600"
-          }`}
-        >
-          {isLoading
+          <button
+            onClick={handleClick}
+            disabled={isLoading}
+            className={`w-64 px-6 py-3 rounded-lg text-white font-medium shadow-md ${
+              wenRTCState
+                ? "bg-red-500 hover:bg-red-600"
+                : "bg-blue-500 hover:bg-black-600"
+            }`}
+          >
+            {isLoading
               ? "Starting session..."
               : wenRTCState
-              ? "Session Active"
+              ? "Session Active. Say hello!"
               : "Begin Interactive Lesson"}
-        </button>
-        <div ref={audioDivRef} />
-      </footer>
+          </button>
+          <div ref={audioDivRef} />
+        </div>
+      </div>
     </div>
   );
 }
